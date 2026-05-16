@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: humetric-api
+      - uses: actions/checkout@v4
+        with:
+          repository: HuMetric-Dev/humetric-core
+          path: humetric-core
+      - uses: actions/checkout@v4
+        with:
+          repository: HuMetric-Dev/humetric-store
+          path: humetric-store
+      - uses: actions/checkout@v4
+        with:
+          repository: HuMetric-Dev/humetric-embed
+          path: humetric-embed
+      - uses: actions/checkout@v4
+        with:
+          repository: HuMetric-Dev/humetric-retrieval
+          path: humetric-retrieval
+      - uses: actions/checkout@v4
+        with:
+          repository: HuMetric-Dev/humetric-ranking
+          path: humetric-ranking
+      - uses: actions/checkout@v4
+        with:
+          repository: HuMetric-Dev/humetric-orchestrator
+          path: humetric-orchestrator
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.7.3"
+      - run: uv python install 3.12
+      - run: uv sync --extra dev
+        working-directory: humetric-api
+      - run: uv run ruff check .
+        working-directory: humetric-api
+      - run: uv run ruff format --check .
+        working-directory: humetric-api
+      - run: uv run ty check src
+        working-directory: humetric-api
+      - run: uv run pytest
+        working-directory: humetric-api
