@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 import time
-from pathlib import Path
 
-from humetric_core import EntityType, Err, Ok, ParsedQuery, Result
-from humetric_orchestrator import append_history, parse_query, write_feed
+from humetric_core import EntityType, Err, Ok, ParsedQuery, Result, User
+from humetric_orchestrator import append_history, parse_query, read_history, write_feed
 from humetric_retrieval import Candidate
 from humetric_store import get_person
 from litestar import get, post
@@ -29,7 +27,7 @@ from humetric_api.errors import (
 
 
 @post("/api/query", sync_to_thread=False, status_code=200)
-def query(data: QueryRequest) -> QueryResponse:
+def query(data: QueryRequest, user: User) -> QueryResponse:
     state = get_state()
     text = data.text.strip()
 
@@ -39,7 +37,7 @@ def query(data: QueryRequest) -> QueryResponse:
     enc_r = state.encoder.encode_one(parsed.free_text)
     text_vec = unwrap_or_problem(_lift_embed(enc_r))
 
-    hist_r = append_history(state.paths.history, parsed, text_vec)
+    hist_r = append_history(state.conn, user.id, parsed, text_vec)
     unwrap_or_problem(_lift_orch(hist_r))
 
     # Pin the API surface to persons for now — the org branch lands in a
@@ -99,10 +97,13 @@ def query(data: QueryRequest) -> QueryResponse:
 
 
 @get("/api/history", sync_to_thread=False)
-def history(limit: int = 20) -> HistoryResponse:
+def history(user: User, limit: int = 20) -> HistoryResponse:
     state = get_state()
-    items = _read_recent_history(state.paths.history, limit=max(1, min(limit, 100)))
-    return HistoryResponse(items=tuple(items))
+    capped = max(1, min(limit, 100))
+    r = read_history(state.conn, user.id, capped)
+    entries = unwrap_or_problem(_lift_orch(r))
+    items = tuple(HistoryItem(ts=e.ts, free_text=e.parsed.free_text) for e in entries)
+    return HistoryResponse(items=items)
 
 
 # --- helpers ---
@@ -138,35 +139,6 @@ def _parsed_to_dto(p: ParsedQuery) -> ParsedQueryDTO:
         min_followers=p.min_followers,
         min_years_experience=p.min_years_experience,
     )
-
-
-def _read_recent_history(path: Path, *, limit: int) -> list[HistoryItem]:
-    """Lightweight history reader — only the fields the UI needs.
-
-    Avoids loading the embedding (a ~384-float blob per row). Skips malformed
-    rows silently; this endpoint is best-effort for the sidebar.
-    """
-    if not path.exists():
-        return []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
-    out: list[HistoryItem] = []
-    for line in reversed(lines[-(limit * 4) :]):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            rec = json.loads(stripped)
-            ts = float(rec["ts"])
-            free_text = str(rec["parsed"]["free_text"])
-        except (ValueError, KeyError, TypeError):
-            continue
-        out.append(HistoryItem(ts=ts, free_text=free_text))
-        if len(out) >= limit:
-            break
-    return out
 
 
 __all__ = ["history", "query"]

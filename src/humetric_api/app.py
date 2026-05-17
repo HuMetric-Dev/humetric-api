@@ -7,8 +7,17 @@ from contextlib import asynccontextmanager
 from humetric_core import Err
 from litestar import Litestar
 from litestar.config.cors import CORSConfig
+from litestar.di import Provide
 from litestar.exceptions import HTTPException
 
+from humetric_api.auth_deps import provide_current_user, require_user
+from humetric_api.auth_routes import (
+    claim_route,
+    login_route,
+    logout_route,
+    me_route,
+    register_route,
+)
 from humetric_api.deps import init_state, shutdown_state
 from humetric_api.routes import history, query
 
@@ -36,9 +45,22 @@ def build_app() -> Litestar:
         allow_origins=[o.strip() for o in cors_origins if o.strip()],
         allow_methods=["GET", "POST"],
         allow_headers=["content-type"],
+        allow_credentials=True,
     )
     return Litestar(
-        route_handlers=[query, history],
+        route_handlers=[
+            query,
+            history,
+            register_route,
+            login_route,
+            logout_route,
+            me_route,
+            claim_route,
+        ],
+        dependencies={
+            "current_user": Provide(provide_current_user),
+            "user": Provide(require_user),
+        },
         cors_config=cors,
         lifespan=[_lifespan],
         exception_handlers={HTTPException: _http_exception_handler},
