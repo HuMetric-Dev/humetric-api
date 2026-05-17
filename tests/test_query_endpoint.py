@@ -8,7 +8,7 @@ import psycopg
 import pytest
 from humetric_core import Ok, Person, Skill
 from humetric_orchestrator import FakeBackend
-from humetric_retrieval import SearchEngine
+from humetric_retrieval import SearchEngine, TypeBranches
 from humetric_retrieval.bm25 import build_bm25
 from humetric_store import upsert_person
 from litestar import Litestar
@@ -78,9 +78,9 @@ def fixture_state(tmp_path: Path, pg_conn: psycopg.Connection) -> Iterator[deps.
             ),
         ).unwrap()
 
-    bm25_r = build_bm25(pg_conn)
+    bm25_r = build_bm25(pg_conn, table="persons")
     assert isinstance(bm25_r, Ok), bm25_r
-    engine = SearchEngine(conn=pg_conn, bm25=bm25_r.value)
+    engine = SearchEngine(conn=pg_conn, persons=TypeBranches(bm25=bm25_r.value))
 
     paths = DataPaths(root=tmp_path)
     paths.history.parent.mkdir(parents=True, exist_ok=True)
@@ -111,6 +111,8 @@ def test_query_returns_ranked_results(fixture_state: deps.AppState) -> None:
         assert len(body["results"]) >= 1
         first = body["results"][0]
         assert first["rank"] == 1
+        # The fixture seeds legacy unprefixed ids ("gh:ada"); api.routes
+        # surfaces whatever id retrieval returned.
         assert first["person_id"] == "gh:ada"
         assert first["name"] == "Ada Lovelace"
         assert "rust" in first["skills"]

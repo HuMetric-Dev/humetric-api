@@ -4,7 +4,7 @@ import json
 import time
 from pathlib import Path
 
-from humetric_core import Err, Ok, ParsedQuery, Result
+from humetric_core import EntityType, Err, Ok, ParsedQuery, Result
 from humetric_orchestrator import append_history, parse_query, write_feed
 from humetric_retrieval import Candidate
 from humetric_store import get_person
@@ -42,15 +42,17 @@ def query(data: QueryRequest) -> QueryResponse:
     hist_r = append_history(state.paths.history, parsed, text_vec)
     unwrap_or_problem(_lift_orch(hist_r))
 
-    search_r = state.engine.search(parsed, k=10)
+    # Pin the API surface to persons for now — the org branch lands in a
+    # follow-up DTO once the UI can render heterogeneous result blocks.
+    search_r = state.engine.search(parsed, k=10, entity_types=("person",))
     cands: list[Candidate] = unwrap_or_problem(_lift_retr(search_r))
 
-    pairs: list[tuple[str, str]] = []
+    triples: list[tuple[str, EntityType, str]] = []
     results: list[PersonResult] = []
     for i, c in enumerate(cands):
-        p_r = get_person(state.conn, c.person_id)
+        p_r = get_person(state.conn, c.entity_id)
         p = unwrap_or_problem(_lift_store(p_r))
-        pairs.append((p.id, p.text_blob()))
+        triples.append((p.id, "person", p.text_blob()))
         results.append(
             PersonResult(
                 rank=i + 1,
@@ -68,9 +70,9 @@ def query(data: QueryRequest) -> QueryResponse:
             )
         )
 
-    feed_r = write_feed(state.backend, parsed.free_text, pairs)
+    feed_r = write_feed(state.backend, parsed.free_text, triples)
     explanations = unwrap_or_problem(_lift_orch(feed_r))
-    expl_by_pid = {e.person_id: e.text for e in explanations}
+    expl_by_eid = {e.entity_id: e.text for e in explanations}
     filled = tuple(
         PersonResult(
             rank=r.rank,
@@ -84,7 +86,7 @@ def query(data: QueryRequest) -> QueryResponse:
             raw_url=r.raw_url,
             skills=r.skills,
             score=r.score,
-            explanation=expl_by_pid.get(r.person_id, ""),
+            explanation=expl_by_eid.get(r.person_id, ""),
         )
         for r in results
     )

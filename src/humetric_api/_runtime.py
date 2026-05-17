@@ -4,6 +4,20 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from humetric_auth import (
+    ClaimAlreadyResolved,
+    EmailAlreadyTaken,
+    EmailMalformed,
+    HashingFailed,
+    InvalidCredentials,
+    PasswordTooWeak,
+    PersonAlreadyClaimed,
+    PersonCandidateNotFound,
+    SessionExpired,
+    SessionNotFound,
+    UserNotFound,
+)
+from humetric_auth import StoreWrapped as AuthStoreWrapped
 from humetric_core import Err, Result
 from humetric_orchestrator import (
     AnthropicBackend,
@@ -34,9 +48,12 @@ from litestar.exceptions import HTTPException
 from humetric_api.dtos import ErrorBody
 from humetric_api.errors import (
     ApiError,
+    AuthWrapped,
     BackendWrapped,
+    ClaimRequestInvalid,
     EmbedWrapped,
     IndexMissing,
+    NotAuthenticated,
     OrchestratorWrapped,
     RetrievalWrapped,
     StoreWrapped,
@@ -134,6 +151,25 @@ def _classify(err: ApiError) -> tuple[int, str]:
         return 503, "store_failed"
     if isinstance(err, EmbedWrapped):
         return 503, "embed_failed"
+    if isinstance(err, AuthWrapped):
+        cause = err.cause
+        if isinstance(cause, EmailAlreadyTaken | PersonAlreadyClaimed | ClaimAlreadyResolved):
+            return 409, "conflict"
+        if isinstance(cause, InvalidCredentials | SessionExpired | SessionNotFound):
+            return 401, "unauthenticated"
+        if isinstance(cause, PersonCandidateNotFound | UserNotFound):
+            return 404, "not_found"
+        if isinstance(cause, EmailMalformed | PasswordTooWeak):
+            return 400, "invalid_request"
+        if isinstance(cause, AuthStoreWrapped):
+            return 503, "store_failed"
+        if isinstance(cause, HashingFailed):
+            return 500, "auth_failed"
+        return 500, "auth_failed"
+    if isinstance(err, NotAuthenticated):
+        return 401, "unauthenticated"
+    if isinstance(err, ClaimRequestInvalid):
+        return 400, "invalid_request"
     if isinstance(err, BackendWrapped):
         return 502, "backend_init_failed"
     if isinstance(err, IndexMissing):

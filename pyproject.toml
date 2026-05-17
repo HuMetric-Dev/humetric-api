@@ -1,24 +1,25 @@
 [project]
 name = "humetric-api"
-version = "0.1.1"
+version = "0.2.0"
 description = "Litestar HTTP layer over the Humetric query pipeline"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Po-Hsuan Lai" }]
 dependencies = [
-    "humetric-core>=0.1,<0.2",
-    "humetric-store>=0.2,<0.3",
+    "humetric-core>=0.2,<0.3",
+    "humetric-store>=0.3,<0.4",
+    "humetric-auth>=0.1,<0.2",
     "humetric-embed>=0.1,<0.2",
     "humetric-retrieval>=0.1,<0.2",
-    "humetric-orchestrator>=0.1,<0.2",
+    "humetric-orchestrator>=0.2,<0.3",
     "litestar[standard]>=2.10,<3",
     "numpy>=1.26,<3",
 ]
 
 [project.optional-dependencies]
 anthropic = [
-    "humetric-orchestrator[anthropic]>=0.1,<0.2",
+    "humetric-orchestrator[anthropic]>=0.2,<0.3",
 ]
 dev = [
     "pytest>=8",
@@ -30,6 +31,7 @@ dev = [
 [tool.uv.sources]
 humetric-core = { path = "../humetric-core", editable = true }
 humetric-store = { path = "../humetric-store", editable = true }
+humetric-auth = { path = "../humetric-auth", editable = true }
 humetric-embed = { path = "../humetric-embed", editable = true }
 humetric-retrieval = { path = "../humetric-retrieval", editable = true }
 humetric-orchestrator = { path = "../humetric-orchestrator", editable = true }

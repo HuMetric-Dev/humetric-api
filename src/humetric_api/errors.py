@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from humetric_auth import AuthError
 from humetric_core import HumetricError
 from humetric_embed import EmbedError
 from humetric_orchestrator import OrchestratorError
@@ -30,6 +31,11 @@ class EmbedWrapped(HumetricError):
 
 
 @dataclass(frozen=True, slots=True)
+class AuthWrapped(HumetricError):
+    cause: AuthError
+
+
+@dataclass(frozen=True, slots=True)
 class BackendWrapped(HumetricError):
     """Raised at startup when the configured LLM backend cannot be loaded."""
 
@@ -42,11 +48,25 @@ class IndexMissing(HumetricError):
     hint: str
 
 
+@dataclass(frozen=True, slots=True)
+class NotAuthenticated(HumetricError):
+    """Route required a session cookie; none was presented or it resolved
+    to an expired/missing session."""
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimRequestInvalid(HumetricError):
+    detail: str
+
+
 type ApiError = (
     OrchestratorWrapped
     | RetrievalWrapped
     | StoreWrapped
     | EmbedWrapped
+    | AuthWrapped
     | BackendWrapped
     | IndexMissing
+    | NotAuthenticated
+    | ClaimRequestInvalid
 )
