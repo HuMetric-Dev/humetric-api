@@ -5,7 +5,7 @@ import time
 from humetric_core import EntityType, Err, Ok, ParsedQuery, Result, User
 from humetric_orchestrator import append_history, parse_query, read_history, write_feed
 from humetric_retrieval import Candidate
-from humetric_store import get_person
+from humetric_store import get_organization, get_person
 from litestar import get, post
 
 from humetric_api._runtime import unwrap_or_problem
@@ -13,6 +13,7 @@ from humetric_api.deps import get_state
 from humetric_api.dtos import (
     HistoryItem,
     HistoryResponse,
+    OrgResult,
     ParsedQueryDTO,
     PersonResult,
     QueryRequest,
@@ -40,38 +41,61 @@ def query(data: QueryRequest, user: User) -> QueryResponse:
     hist_r = append_history(state.conn, user.id, parsed, text_vec)
     unwrap_or_problem(_lift_orch(hist_r))
 
-    # Pin the API surface to persons for now — the org branch lands in a
-    # follow-up DTO once the UI can render heterogeneous result blocks.
-    search_r = state.engine.search(parsed, k=10, entity_types=("person",))
+    et_override = _coerce_entity_types(data.entity_types)
+    search_r = state.engine.search(parsed, k=10, entity_types=et_override)
     cands: list[Candidate] = unwrap_or_problem(_lift_retr(search_r))
 
     triples: list[tuple[str, EntityType, str]] = []
-    results: list[PersonResult] = []
-    for i, c in enumerate(cands):
-        p_r = get_person(state.conn, c.entity_id)
-        p = unwrap_or_problem(_lift_store(p_r))
-        triples.append((p.id, "person", p.text_blob()))
-        results.append(
-            PersonResult(
-                rank=i + 1,
-                person_id=p.id,
-                name=p.name,
-                headline=p.headline,
-                location=p.location,
-                follower_count=p.follower_count,
-                last_active_days_ago=p.last_active_days_ago,
-                source=p.source,
-                raw_url=p.raw_url,
-                skills=tuple(s.normalized for s in p.skills),
-                score=float(c.score),
-                explanation="",
+    person_results: list[PersonResult] = []
+    org_results: list[OrgResult] = []
+    person_rank = 0
+    org_rank = 0
+    for c in cands:
+        if c.entity_type == "organization":
+            o_r = get_organization(state.conn, c.entity_id)
+            o = unwrap_or_problem(_lift_store(o_r))
+            org_rank += 1
+            triples.append((o.id, "organization", o.text_blob()))
+            org_results.append(
+                OrgResult(
+                    rank=org_rank,
+                    org_id=o.id,
+                    name=o.name,
+                    headline=o.headline,
+                    location=o.location,
+                    source=o.source,
+                    raw_url=o.raw_url,
+                    org_kind=o.org_kind,
+                    score=float(c.score),
+                    explanation="",
+                )
             )
-        )
+        else:
+            p_r = get_person(state.conn, c.entity_id)
+            p = unwrap_or_problem(_lift_store(p_r))
+            person_rank += 1
+            triples.append((p.id, "person", p.text_blob()))
+            person_results.append(
+                PersonResult(
+                    rank=person_rank,
+                    person_id=p.id,
+                    name=p.name,
+                    headline=p.headline,
+                    location=p.location,
+                    follower_count=p.follower_count,
+                    last_active_days_ago=p.last_active_days_ago,
+                    source=p.source,
+                    raw_url=p.raw_url,
+                    skills=tuple(s.normalized for s in p.skills),
+                    score=float(c.score),
+                    explanation="",
+                )
+            )
 
     feed_r = write_feed(state.backend, parsed.free_text, triples)
     explanations = unwrap_or_problem(_lift_orch(feed_r))
     expl_by_eid = {e.entity_id: e.text for e in explanations}
-    filled = tuple(
+    persons_filled = tuple(
         PersonResult(
             rank=r.rank,
             person_id=r.person_id,
@@ -86,13 +110,29 @@ def query(data: QueryRequest, user: User) -> QueryResponse:
             score=r.score,
             explanation=expl_by_eid.get(r.person_id, ""),
         )
-        for r in results
+        for r in person_results
+    )
+    orgs_filled = tuple(
+        OrgResult(
+            rank=r.rank,
+            org_id=r.org_id,
+            name=r.name,
+            headline=r.headline,
+            location=r.location,
+            source=r.source,
+            raw_url=r.raw_url,
+            org_kind=r.org_kind,
+            score=r.score,
+            explanation=expl_by_eid.get(r.org_id, ""),
+        )
+        for r in org_results
     )
 
     return QueryResponse(
         ts=time.time(),
         parsed=_parsed_to_dto(parsed),
-        results=filled,
+        results=persons_filled,
+        organizations=orgs_filled,
     )
 
 
@@ -128,6 +168,21 @@ def _lift_store[T](r):  # type: ignore[no-untyped-def]
 
 def _lift_embed[T](r):  # type: ignore[no-untyped-def]
     return r if isinstance(r, Ok) else Err(EmbedWrapped(cause=r.error))
+
+
+def _coerce_entity_types(raw: tuple[str, ...] | None) -> tuple[EntityType, ...] | None:
+    """Translate client-provided entity_types into the EntityType literal type,
+    silently dropping unknown values. None means "let parse_query decide"."""
+    if raw is None:
+        return None
+    out: list[EntityType] = []
+    for v in raw:
+        s = v.strip().lower()
+        if s in ("person", "people"):
+            out.append("person")
+        elif s in ("organization", "org", "company", "companies"):
+            out.append("organization")
+    return tuple(out) if out else None
 
 
 def _parsed_to_dto(p: ParsedQuery) -> ParsedQueryDTO:

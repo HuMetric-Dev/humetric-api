@@ -5,6 +5,9 @@ import msgspec
 
 class QueryRequest(msgspec.Struct, frozen=True):
     text: str
+    # Override which entity tables to retrieve. None lets the LLM parser
+    # decide via ParsedQuery.target_entity_types.
+    entity_types: tuple[str, ...] | None = None
 
 
 class ParsedQueryDTO(msgspec.Struct, frozen=True):
@@ -31,10 +34,25 @@ class PersonResult(msgspec.Struct, frozen=True):
     explanation: str
 
 
+class OrgResult(msgspec.Struct, frozen=True):
+    rank: int
+    org_id: str
+    name: str
+    headline: str
+    location: str
+    source: str
+    raw_url: str
+    org_kind: str
+    score: float
+    explanation: str
+
+
 class QueryResponse(msgspec.Struct, frozen=True):
     ts: float
     parsed: ParsedQueryDTO
-    results: tuple[PersonResult, ...]
+    # `results` is kept as the person block for frontend back-compat.
+    results: tuple[PersonResult, ...] = ()
+    organizations: tuple[OrgResult, ...] = ()
 
 
 class HistoryItem(msgspec.Struct, frozen=True):

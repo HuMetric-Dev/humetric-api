@@ -8,8 +8,15 @@ import psycopg
 from humetric_core import Err, Ok, Result
 from humetric_embed import TextEncoder
 from humetric_orchestrator import LLMBackend
-from humetric_retrieval import DenseBranch, SearchEngine, build_bm25, build_engine, open_bm25
-from humetric_store import StoreError, VectorIndex, load_vector_index, open_db
+from humetric_retrieval import (
+    DenseBranch,
+    SearchEngine,
+    TypeBranches,
+    build_bm25,
+    build_engine,
+    open_bm25,
+)
+from humetric_store import StoreError, load_vector_index, open_db
 
 from humetric_api._runtime import DataPaths, resolve_paths, select_backend
 from humetric_api.errors import (
@@ -69,30 +76,42 @@ def init_state() -> Result[AppState, ApiError]:
     if isinstance(conn_r, Err):
         return Err(StoreWrapped(cause=conn_r.error))
     conn = conn_r.value
+    # open_db opens autocommit=False so the idempotent DDL migration runs in
+    # one transaction. The api holds a singleton connection across requests,
+    # so we flip to autocommit afterwards — otherwise any read-only request
+    # leaves the connection "idle in transaction", holding row/share locks
+    # and blocking the next migrating connection (e.g. a `build-index` run)
+    # behind a relation lock. open_db's post-DDL register_vector() opens
+    # an implicit txn that's never committed, so commit before the flip
+    # (psycopg refuses to change autocommit while INTRANS).
+    conn.commit()
+    conn.autocommit = True
 
     encoder_loaded = TextEncoder(model=os.environ.get("HUMETRIC_ENCODER", "bge-small")).load()
     if isinstance(encoder_loaded, Err):
         return Err(EmbedWrapped(cause=encoder_loaded.error))
     enc = encoder_loaded.value
 
-    idx_r = load_vector_index(conn, "text")
-    if isinstance(idx_r, Err):
-        return Err(StoreWrapped(cause=idx_r.error))
-    text_index: VectorIndex = idx_r.value
-    if text_index.size == 0:
+    persons_b_r = _build_type_branches(conn, enc, paths.bm25_index, table="persons")
+    if isinstance(persons_b_r, Err):
+        return persons_b_r
+    persons_b = persons_b_r.value
+
+    orgs_bm25_path = paths.bm25_index.parent / f"{paths.bm25_index.name}_orgs"
+    orgs_b_r = _build_type_branches(conn, enc, orgs_bm25_path, table="organizations")
+    if isinstance(orgs_b_r, Err):
+        return orgs_b_r
+    orgs_b = orgs_b_r.value
+
+    if persons_b is None and orgs_b is None:
         return Err(
             IndexMissing(
-                path="persons.vec_text",
-                hint="run `humetric build-index` to populate text vectors.",
+                path="persons.vec_text / organizations.vec_text",
+                hint="run `humetric build-index` to populate text vectors for at least one table.",
             )
         )
-    dense = DenseBranch(encoder=enc, index=text_index)
 
-    bm25_r = open_bm25(paths.bm25_index) if paths.bm25_index.is_dir() else build_bm25(conn)
-    if isinstance(bm25_r, Err):
-        return Err(RetrievalWrapped(cause=bm25_r.error))
-
-    engine_r = build_engine(conn, bm25=bm25_r.value, text_branch=dense)
+    engine_r = build_engine(conn, persons=persons_b, organizations=orgs_b)
     if isinstance(engine_r, Err):
         return Err(RetrievalWrapped(cause=engine_r.error))
     engine = engine_r.value
@@ -114,6 +133,34 @@ def init_state() -> Result[AppState, ApiError]:
         backend=backend,
     )
     return Ok(_state)
+
+
+def _build_type_branches(
+    conn: psycopg.Connection,
+    enc: TextEncoder,
+    bm25_path,  # Path; left untyped here to avoid an extra import
+    *,
+    table: str,
+) -> Result[TypeBranches | None, ApiError]:
+    """Build a TypeBranches for one entity table, or return None when there are
+    no indexed text vectors for that table (so the engine can skip the type)."""
+    idx_r = load_vector_index(conn, "text", table=table)
+    if isinstance(idx_r, Err):
+        return Err(StoreWrapped(cause=idx_r.error))
+    text_index = idx_r.value
+    if text_index.size == 0:
+        return Ok[TypeBranches | None](None)
+
+    dense = DenseBranch(encoder=enc, index=text_index)
+
+    bm25_r = (
+        open_bm25(bm25_path) if bm25_path.is_dir() else build_bm25(conn, table=table)  # type: ignore[arg-type]
+    )
+    if isinstance(bm25_r, Err):
+        # An empty corpus (CorpusEmpty) is fine — skip this type.
+        return Ok[TypeBranches | None](None)
+
+    return Ok[TypeBranches | None](TypeBranches(bm25=bm25_r.value, text_branch=dense))
 
 
 def open_pg(dsn: str) -> Result[psycopg.Connection, StoreError]:
